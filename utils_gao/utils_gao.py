@@ -9,13 +9,72 @@ from sklearn.metrics import roc_curve,auc
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-
+import time
 
 import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+def countRunTimeDecorater(func):
+    '''
+    装饰器，计算一个函数的运行时长
+    usage:  @countRunTimeDecorater
+            def blabla():
+                pass
+    '''
+    def wrapper(*args,**kw):
+        start = time.time()
+        result = func(*args,**kw)
+        end = time.time()
+        cost = end - start
+        if cost >= 60:
+            print(f'run time: {int(cost//60)} min {cost%60:.2f}s')
+        else:
+            print(f'run time: {cost:.2f} s')
+        return result
+    return wrapper
+
+from contextlib import contextmanager
+@contextmanager
+def countRunTimeContext():
+    '''
+    计算一段代码运行时长
+    usage:  with countRunTimeContext():
+                time.sleep(10)        
+    '''
+    start =time.time()
+    yield
+    end = time.time()
+    cost = end - start
+    if cost >= 60:
+        print(f'run time: {int(cost//60)} min {cost%60:.2f}s')
+    else:
+        print(f'run time: {cost:.2f} s')
+
+
+def count_corr(df):
+    '''
+    输入dataframe
+    输出相关系数dataframe:col_1,col_2,cor(不包含同一特征且已去重复)
+    '''
+    x = df.corr().abs().unstack().sort_values(ascending=False).reset_index()
+    x = x.loc[x.level_0!=x.level_1]
+    x2 = pd.DataFrame([sorted(i) for i in x[['level_0','level_1']].values])
+    x2['cor'] = x[0].values
+    x2.columns = ['col_1','col_2','cor']
+    return x2.drop_duplicates()
+    
+def lgb_f1_sklearn(y_true, y_pred):
+    preds = y_pred.reshape(len(np.unique(y_true)), -1)
+    preds = preds.argmax(axis = 0)
+    return 'f1_score', f1_score(y_true, preds,average='macro'), True
+def lgb_feature_importance_naive(clf):
+    '''
+    lgb原生接口的重要性排序
+    sklearn wrapper没用.feature_name故无法使用，需要单独传入feture name
+    '''
+    return pd.DataFrame([clf.feature_name(),clf.feature_importance().tolist()],index=['feature','importance']).T.sort_values(by='importance',ascending=False).reset_index(drop=True)
 def plot_train_curve_lgb_sklearn(clf):
     '''
     传入为lightgbm的sklearn形式的模型
@@ -27,7 +86,67 @@ def plot_train_curve_lgb_sklearn(clf):
     plt.title(f'{loss_name}')        
     plt.legend()
     plt.show()
+def feature_selection(feature_matrix, missing_threshold=90, correlation_threshold=0.95):
+    """
+    Feature selection for a dataframe.
+    use for feature tools
+    """
     
+    #feature_matrix = pd.get_dummies(feature_matrix)
+    n_features_start = feature_matrix.shape[1]
+    #print('Original shape: ', feature_matrix.shape)
+
+    _, idx = np.unique(feature_matrix, axis = 1, return_index = True)
+    feature_matrix = feature_matrix.iloc[:, idx]
+    n_non_unique_columns = n_features_start - feature_matrix.shape[1]
+    print('{}  non-unique valued columns.'.format(n_non_unique_columns))
+
+    # Find missing and percentage
+    missing = pd.DataFrame(feature_matrix.isnull().sum())
+    missing['percent'] = 100 * (missing[0] / feature_matrix.shape[0])
+    missing.sort_values('percent', ascending = False, inplace = True)
+
+    # Missing above threshold
+    missing_cols = list(missing[missing['percent'] > missing_threshold].index)
+    n_missing_cols = len(missing_cols)
+
+    # Remove missing columns
+    feature_matrix = feature_matrix[[x for x in feature_matrix if x not in missing_cols]]
+    print('{} missing columns with threshold: {}.'.format(n_missing_cols,
+                                                                        missing_threshold))
+    
+    # Zero variance
+    unique_counts = pd.DataFrame(feature_matrix.nunique()).sort_values(0, ascending = True)
+    zero_variance_cols = list(unique_counts[unique_counts[0] == 1].index)
+    n_zero_variance_cols = len(zero_variance_cols)
+
+    # Remove zero variance columns
+    feature_matrix = feature_matrix[[x for x in feature_matrix if x not in zero_variance_cols]]
+    print('{} zero variance columns.'.format(n_zero_variance_cols))
+    
+    # Correlations
+    print('shape:',feature_matrix.shape)
+    print('corr..')
+    corr_matrix = feature_matrix.corr()
+    print('corr done')
+    # Extract the upper triangle of the correlation matrix
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k = 1).astype(np.bool))
+
+    # Select the features with correlations above the threshold
+    # Need to use the absolute value
+    to_drop = [column for column in upper.columns if any(upper[column].abs() > correlation_threshold)]
+
+    n_collinear = len(to_drop)
+    
+    feature_matrix = feature_matrix[[x for x in feature_matrix if x not in to_drop]]
+    print('{} collinear columns removed with threshold: {}.'.format(n_collinear,
+                                                                          correlation_threshold))
+    
+    total_removed = n_non_unique_columns + n_missing_cols + n_zero_variance_cols + n_collinear
+    
+    print('Total columns removed: ', total_removed)
+    print('Shape after feature selection: {}.'.format(feature_matrix.shape))
+    return feature_matrix    
 def reduce_mem_usage(df):
     """ iterate through all the columns of a dataframe and modify the data type
         to reduce memory usage.        
@@ -137,7 +256,7 @@ def train_test_distribution_difference(train_data,test_data,ignored_col=[],min_t
     print('Union cover: \n',union)
     # Return 4 Seq
     return std_calc.index.values,mean_calc.index.values,both,union
-
+ 
 # Function to analysis label describe
 def label_analysis(data,label_name=None,feature_name=[],descirbePrint = True, figShow=True,figsize=None):
     '''
@@ -150,10 +269,10 @@ def label_analysis(data,label_name=None,feature_name=[],descirbePrint = True, fi
     count_label.columns = ['cate','total']
     print(count_label)
     try:
-        data[label_name].astype(int).plot.hist(edgecolor='w',title='label number distribution')
+        data[label_name].astype(int).value_counts().sort_index().plot.bar(title='label number distribution')
         plt.show()
     except:
-        data[label_name].fillna(-1).astype(int).plot.hist(edgecolor='w',title='label number distribution')
+        data[label_name].fillna(-1).astype(int).value_counts().sort_index().plot.bar(title='label number distribution')
         plt.show()
     # Describe 01
     if len(feature_name)==0:
@@ -236,6 +355,10 @@ def save_pickle(filename,pkls):
     f.close()    
 
 def mem_usage(element,ctype = 'G'):
+    '''
+    通过sys.getsizeof计算变量占用字节的大小，默认为G，可同过ctype指定参数['G','M','K']
+    返回占用的大小
+    '''
     if ctype=='G':
         mem = sys.getsizeof(element)/2**30
     elif ctype=='M':
@@ -247,15 +370,6 @@ def mem_usage(element,ctype = 'G'):
         return False
     print(f'memory usage: {mem:.2f}{ctype}')
     return mem
-
-
-
-
-def get_data_ndays(data,fromday=0,today=10):
-    data_group = data.groupby('serial_number')
-    return data_group.apply(lambda x: x.iloc[fromday:today,:]).reset_index(drop=True)
-
-
 
 def confusion_matrix_plot_matplotlib(y_truth, y_predict,normalize = False, cmap=plt.cm.cool,title='Confusion matrix',figsize=None,silent = False):
     """Matplotlib绘制混淆矩阵图

@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="utils_gao",
-    version="0.0.7",
+    version="0.0.9",
     author="pipixiu",
     author_email="1783198484@qq.com",
     description="utils module for my ML",
