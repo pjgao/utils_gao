@@ -69,11 +69,16 @@ def lgb_f1_sklearn(y_true, y_pred):
     preds = y_pred.reshape(len(np.unique(y_true)), -1)
     preds = preds.argmax(axis = 0)
     return 'f1_score', f1_score(y_true, preds,average='macro'), True
-def lgb_feature_importance_naive(clf):
+def lgb_feature_importance(clf,sklearnWrapper=False):
     '''
-    lgb原生接口的重要性排序
-    sklearn wrapper没用.feature_name故无法使用，需要单独传入feture name
+    lgb重要性排序
+    如果是原生接口直接默认sklearnWrapper==False
+    如果是sklean的lgb,需要指定sklearnWrapper = True    
+    为了避免导入lgb库，故未使用isinstance判断，而是增加了一个参数
+    返回dataframe
     '''
+    if sklearn == True:
+        clf = clf.booster_
     return pd.DataFrame([clf.feature_name(),clf.feature_importance().tolist()],index=['feature','importance']).T.sort_values(by='importance',ascending=False).reset_index(drop=True)
 def plot_train_curve_lgb_sklearn(clf):
     '''
