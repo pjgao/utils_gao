@@ -5,7 +5,7 @@ import numpy as np
 import sys
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve,auc
-
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -52,7 +52,6 @@ def countRunTimeContext():
     else:
         print(f'run time: {cost:.2f} s')
 
-
 def count_corr(df):
     '''
     输入dataframe
@@ -65,10 +64,37 @@ def count_corr(df):
     x2.columns = ['col_1','col_2','cor']
     return x2.drop_duplicates()
     
+def columnsAnalysis(data,corr_label=None):
+    '''
+    对每列的基本情况分析，列类型，缺失值，值个数，以及与相关程度
+    '''
+    dtypes = data.dtypes
+    nunique = data.nunique().sort_values()
+    missing = data.isnull().sum()
+    df = pd.concat([dtypes,nunique,missing],axis=1,sort=False,keys=['dtypes','nunique','missing']).sort_values('dtypes')
+    if corr_label:
+        corr = data.corrwith(data[corr_label])
+        corr_name = 'corr_'+corr_label
+        df = pd.concat([df,corr.rename(corr_name)],axis=1,sort=False).sort_values(['dtypes'])
+        df[corr_name+'_abs'] = df[corr_name].apply(abs)
+        df = df.sort_values(['dtypes',corr_name+'_abs'],ascending=False).drop([corr_name+'_abs'],axis=1)
+    return df
+    
+def missing_plot(data,figsize=(10,5),xtickFontSize = 15, xtickRotation = 45):
+    '''
+    画出每个dataframe的缺失值情况
+    '''
+    fig,ax = plt.subplots(figsize=figsize) # set figsize
+    sns.heatmap(data.notnull().astype(int),yticklabels=False,ax=ax,cbar=False)
+    ax.xaxis.set_ticklabels(ax.get_xticklabels(),rotation=xtickRotation,fontsize=xtickFontSize) # xtick label font size and rotation 45
+    ax.xaxis.set_ticks_position('top')# xtick position 
+    plt.show()
+    
 def lgb_f1_sklearn(y_true, y_pred):
     preds = y_pred.reshape(len(np.unique(y_true)), -1)
     preds = preds.argmax(axis = 0)
     return 'f1_score', f1_score(y_true, preds,average='macro'), True
+    
 def lgb_feature_importance(clf,sklearnWrapper=False):
     '''
     lgb重要性排序
@@ -80,6 +106,26 @@ def lgb_feature_importance(clf,sklearnWrapper=False):
     if sklearn == True:
         clf = clf.booster_
     return pd.DataFrame([clf.feature_name(),clf.feature_importance().tolist()],index=['feature','importance']).T.sort_values(by='importance',ascending=False).reset_index(drop=True)
+
+
+def print_graph(clf, feature_names): 
+    """Print decision tree.""" 
+    import pydotplus 
+    # you can install pydotplus with: pip install pydotplus 
+    from IPython .display import Image 
+    from sklearn.tree import export_graphviz 
+    graph = export_graphviz( clf,
+                            label= "root" , 
+                            proportion= True , 
+                            impurity= False , 
+                            out_file= None , 
+                            feature_names=feature_names, 
+                            class_names={ 0 : "D" , 1 : "R" }, 
+                            filled= True , 
+                            rounded= True )
+    graph = pydotplus.graph_from_dot_data(graph) 
+    return Image (graph.create_png())
+
 def plot_train_curve_lgb_sklearn(clf):
     '''
     传入为lightgbm的sklearn形式的模型
@@ -91,6 +137,7 @@ def plot_train_curve_lgb_sklearn(clf):
     plt.title(f'{loss_name}')        
     plt.legend()
     plt.show()
+    
 def feature_selection(feature_matrix, missing_threshold=90, correlation_threshold=0.95):
     """
     Feature selection for a dataframe.
@@ -152,6 +199,7 @@ def feature_selection(feature_matrix, missing_threshold=90, correlation_threshol
     print('Total columns removed: ', total_removed)
     print('Shape after feature selection: {}.'.format(feature_matrix.shape))
     return feature_matrix    
+    
 def reduce_mem_usage(df):
     """ iterate through all the columns of a dataframe and modify the data type
         to reduce memory usage.        
@@ -159,7 +207,7 @@ def reduce_mem_usage(df):
     start_mem = df.memory_usage().sum() / 1024**2
     print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
     
-    for col in df.columns:
+    for col in tqdm(df.columns):
         col_type = df[col].dtype
         
         if col_type != object:
@@ -190,9 +238,8 @@ def reduce_mem_usage(df):
     
     return df
 
-
-# Function to calculate missing values by columns
 def missing_values_table(data,topK=20):
+    # Function to calculate missing values by columns
     #计算topK个缺失值，及百分比
     mis_val = data.isnull().sum()
     mis_val_percent = 100 * data.isnull().sum() / len(data)
@@ -209,9 +256,9 @@ def missing_values_table(data,topK=20):
     print('_'*60)
     print(mis_val_table_ren_columns.head(topK))
 
-# Function to print columns types
 def column_types_table(data,figShow =True, figsize = None):
-    '''
+       '''
+    Function to print columns types
     计算数据的类型及占比
     '''
     print('Number of each type of columns:')
@@ -233,9 +280,9 @@ def column_types_table(data,figShow =True, figsize = None):
             plt.show()
         print(df)
 
-# Function to screen big diffrence feature between Train and Test
 def train_test_distribution_difference(train_data,test_data,ignored_col=[],min_threshold=0.8,max_threshold=1.25):
     '''
+    Function to screen big diffrence feature between Train and Test
     通过计算train和test的describe,对std和mean做除，比较train和test的分布是否一致，对于不一致的特征滤除
     return std_calc.index.values,mean_calc.index.values,both,union
     '''
@@ -262,9 +309,9 @@ def train_test_distribution_difference(train_data,test_data,ignored_col=[],min_t
     # Return 4 Seq
     return std_calc.index.values,mean_calc.index.values,both,union
  
-# Function to analysis label describe
 def label_analysis(data,label_name=None,feature_name=[],descirbePrint = True, figShow=True,figsize=None):
     '''
+    Function to analysis label describe
     将选定特征分标签对比
     figShow: bool, 是否输出不同标签特定特征的均值分布图像
     figsize: tuple, 调节该图像的大小(15,10)
@@ -302,7 +349,7 @@ def label_analysis(data,label_name=None,feature_name=[],descirbePrint = True, fi
     print('Most Positive Correlations:\n', correlations.tail(15))
     print('\nMost Negative Correlations:\n', correlations.head(15))
 
-def roc_auc_plot(y_test,y_proba):
+def roc_auc_plot(y_test,y_proba,title='roc_curve'):
 	#ytest为真实的标签，shuffleResult[:,1]为预测结果为坏盘的概率
 	fpr, tpr, thresholds = roc_curve(y_test,y_proba)
 	roc_auc = auc(fpr, tpr)#auc值，roc曲线下面积大小
@@ -313,7 +360,7 @@ def roc_auc_plot(y_test,y_proba):
 	plt.legend(loc='best')
 	plt.xlabel('False Positive Rate')  
 	plt.ylabel('True Positive Rate')
-	plt.title(u'2016测试集(1000个好盘112个坏盘混合)的ROC曲线:')
+	plt.title(title)
 	plt.show()
 	
 def unique(lst):
@@ -421,7 +468,6 @@ def confusion_matrix_plot_matplotlib(y_truth, y_predict,normalize = False, cmap=
         fig = plt.gcf()
         fig.set_size_inches(figsize)
     plt.show()  # 显示作图
-
 
 def series_to_supervised(data, n_in=1, n_out=1, dropnan=True):
     """
